@@ -12,8 +12,8 @@ import CommonCrypto
 
 class MultipartRequest: NSObject, URLSessionDelegate {
     
-    let accessKey = "AKIA5YHCYZAHXDEYYOHV"
-    let secretKey = "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"
+    let accessKey = "AKIA5YHCYZAHS7BIS25U"
+    let secretKey = "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"
     let bucketName = "videostestdummy"
     let fileName = "multiUploadFile"
     let contentType = "video/MP4"
@@ -22,6 +22,7 @@ class MultipartRequest: NSObject, URLSessionDelegate {
     var session: URLSession?
     var videoURLs : [URL] = []
     let opQueue = OperationQueue()
+    let newFileName = "test"
     
     var multipartUploadId: String?
     var completedPartsInfo: AWSS3CompletedMultipartUpload?
@@ -29,7 +30,7 @@ class MultipartRequest: NSObject, URLSessionDelegate {
     init(fileURL: URL, isSingle: Bool = false) {
         self.fileURL = fileURL
         super.init()
-        opQueue.maxConcurrentOperationCount = 3
+        opQueue.maxConcurrentOperationCount = 1
         self.session = URLSession.init(configuration: .default, delegate: self, delegateQueue: opQueue)
         if isSingle {
             chunkSize = fileURL.getFileSize()
@@ -55,6 +56,11 @@ class MultipartRequest: NSObject, URLSessionDelegate {
         }
         let chunkSize = chunkSize
         let filePath = videoUrl.path
+        
+        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+            let documentsDirectory = paths[0]
+        let newFilePath = documentsDirectory.appendingPathComponent(newFileName)
+        
         if let stream = InputStream(fileAtPath: filePath) {
             stream.open()
             var i = 1
@@ -74,8 +80,9 @@ class MultipartRequest: NSObject, URLSessionDelegate {
                 } else {
                     data.append(buffer, count: read)
                     //                    if let data = try? Data(reading: stream, bufferSize: chunkSize) {
-                    let newFile = "\(filePath)_\(i)"
-                    FileManager.default.createFile(atPath: newFile, contents: data, attributes: nil)
+                    let newFile = "\(newFilePath.path)_\(i)"
+                    let result = FileManager.default.createFile(atPath: newFile, contents: data, attributes: [:])
+                    print("file chunk \(i) written : \(result)")
                     urls.append(URL(fileURLWithPath: newFile))
                     //                    }
                 }
@@ -113,7 +120,7 @@ class MultipartRequest: NSObject, URLSessionDelegate {
             //as individual part complete you'll want to keep track of those
             //as AWS S3 requires the list of all parts to be able to reassemble the file
             self.completedPartsInfo = AWSS3CompletedMultipartUpload()
-                                 
+            self.completedPartsInfo?.parts = []
             //now that we have an upload ID we can actually start uploading the parts
             self.uploadAllParts()
             
@@ -222,6 +229,8 @@ class MultipartRequest: NSObject, URLSessionDelegate {
     
     func handleSuccessfulPartUploadInSession (partNumber: Int, response: HTTPURLResponse)
     {
+        print(response)
+        print("partNumber: \(partNumber)")
         //for each part we need to save the etag and the part number
         guard let completedPart = AWSS3CompletedPart() else { return }
         
@@ -230,14 +239,14 @@ class MultipartRequest: NSObject, URLSessionDelegate {
         
         //save the etag as AWS needs that information
         let headers = response.allHeaderFields
-        completedPart.eTag = headers["ETag"] as? String
+        completedPart.eTag = headers["Etag"] as? String
         
         //add the part to the list of completed parts
         self.completedPartsInfo?.parts?.append(completedPart)
         
         //check if there are any other parts uploading
         self.session!.getAllTasks(completionHandler: { (tasks:[URLSessionTask]) -> Void in
-            if tasks.count > 1 //completed task are flushed from the list, current task is still listed though, hence 1
+            if tasks.count > 0 //completed task are flushed from the list, current task is still listed though, hence 1
             {
                 //upload is still progressing
             }
@@ -264,12 +273,16 @@ class MultipartRequest: NSObject, URLSessionDelegate {
         guard let complete = AWSS3CompleteMultipartUploadRequest() else { return }
         complete.uploadId = self.multipartUploadId
         complete.bucket = bucketName
-        complete.multipartUpload = self.completedPartsInfo
+        complete.multipartUpload = completedPartsInfo
         complete.key = accessKey
+//        complete.expectedBucketOwner =
         
         //run the request that will complete the uplaod
-        AWSS3.default().completeMultipartUpload(complete).continueWith(block: { (task:AWSTask!) -> AnyObject? in
+        let task = AWSS3.default().completeMultipartUpload(complete)
+        task.continueWith(block: { task in
             //handle error and do any needed cleanup
+            print(task.result)
+            print(task.error)
             return nil
         })
     }
